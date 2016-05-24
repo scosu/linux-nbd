@@ -3,7 +3,7 @@
  *
  * Note that you can not swap over this thing, yet. Seems to work but
  * deadlocks sometimes - you can not swap over TCP in general.
- * 
+ *
  * Copyright 1997-2000, 2008 Pavel Machek <pavel@ucw.cz>
  * Parts copyright 2001 Steven Whitehouse <steve@chygwyn.com>
  *
@@ -35,14 +35,14 @@
 #include <linux/types.h>
 #include <linux/debugfs.h>
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/types.h>
 
 #include <linux/nbd.h>
 
 struct nbd_device {
 	u32 flags;
-	struct socket * sock;	/* If == NULL, device is not ready, yet	*/
+	struct socket *sock;	/* If == NULL, device is not ready, yet	*/
 	int magic;
 
 	spinlock_t queue_lock;
@@ -266,6 +266,7 @@ static inline int sock_send_bvec(struct nbd_device *nbd, struct bio_vec *bvec,
 {
 	int result;
 	void *kaddr = kmap(bvec->bv_page);
+
 	result = sock_xmit(nbd, 1, kaddr + bvec->bv_offset,
 			   bvec->bv_len, flags);
 	kunmap(bvec->bv_page);
@@ -363,6 +364,7 @@ static inline int sock_recv_bvec(struct nbd_device *nbd, struct bio_vec *bvec)
 {
 	int result;
 	void *kaddr = kmap(bvec->bv_page);
+
 	result = sock_xmit(nbd, 0, kaddr + bvec->bv_offset, bvec->bv_len,
 			MSG_WAITALL);
 	kunmap(bvec->bv_page);
@@ -593,8 +595,8 @@ static int nbd_thread_send(void *data)
 }
 
 /*
- * We always wait for result of write, for now. It would be nice to make it optional
- * in future
+ * We always wait for result of write, for now. It would be nice to make it
+ * optional in future
  * if ((rq_data_dir(req) == WRITE) && (nbd->flags & NBD_WRITE_NOCHK))
  *   { printk( "Warning: Ignoring result!\n"); nbd_end_request( req ); }
  */
@@ -603,7 +605,7 @@ static void nbd_request_handler(struct request_queue *q)
 		__releases(q->queue_lock) __acquires(q->queue_lock)
 {
 	struct request *req;
-	
+
 	while ((req = blk_fetch_request(q)) != NULL) {
 		struct nbd_device *nbd;
 
@@ -721,7 +723,7 @@ static int __nbd_ioctl(struct block_device *bdev, struct nbd_device *nbd,
 		nbd_send_req(nbd, &sreq);
 		return 0;
 	}
- 
+
 	case NBD_CLEAR_SOCK:
 		sock_shutdown(nbd);
 		nbd_clear_que(nbd);
@@ -852,8 +854,7 @@ static int nbd_ioctl(struct block_device *bdev, fmode_t mode,
 	return error;
 }
 
-static const struct block_device_operations nbd_fops =
-{
+static const struct block_device_operations nbd_fops = {
 	.owner =	THIS_MODULE,
 	.ioctl =	nbd_ioctl,
 	.compat_ioctl =	nbd_ioctl,
@@ -988,7 +989,7 @@ static void nbd_dbg_close(void)
 #endif
 
 /*
- * And here should be modules and kernel interface 
+ * And here should be modules and kernel interface
  *  (Just smiley confuses emacs :-)
  */
 
@@ -1001,7 +1002,7 @@ static int __init nbd_init(void)
 	BUILD_BUG_ON(sizeof(struct nbd_request) != 28);
 
 	if (max_part < 0) {
-		printk(KERN_ERR "nbd: max_part must be >= 0\n");
+		pr_err("nbd: max_part must be >= 0\n");
 		return -EINVAL;
 	}
 
@@ -1032,6 +1033,7 @@ static int __init nbd_init(void)
 
 	for (i = 0; i < nbds_max; i++) {
 		struct gendisk *disk = alloc_disk(1 << part_shift);
+
 		if (!disk)
 			goto out;
 		nbd_dev[i].disk = disk;
@@ -1062,12 +1064,13 @@ static int __init nbd_init(void)
 		goto out;
 	}
 
-	printk(KERN_INFO "nbd: registered device at major %d\n", NBD_MAJOR);
+	pr_info("nbd: registered device at major %d\n", NBD_MAJOR);
 
 	nbd_dbg_init();
 
 	for (i = 0; i < nbds_max; i++) {
 		struct gendisk *disk = nbd_dev[i].disk;
+
 		nbd_dev[i].magic = NBD_MAGIC;
 		INIT_LIST_HEAD(&nbd_dev[i].waiting_queue);
 		spin_lock_init(&nbd_dev[i].queue_lock);
@@ -1115,7 +1118,7 @@ static void __exit nbd_cleanup(void)
 	}
 	unregister_blkdev(NBD_MAJOR, "nbd");
 	kfree(nbd_dev);
-	printk(KERN_INFO "nbd: unregistered device at major %d\n", NBD_MAJOR);
+	pr_info("nbd: unregistered device at major %d\n", NBD_MAJOR);
 }
 
 module_init(nbd_init);
