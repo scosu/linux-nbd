@@ -439,10 +439,8 @@ static ssize_t pid_show(struct device *dev,
 	return sprintf(buf, "%d\n", task_pid_nr(nbd->task_recv));
 }
 
-static struct device_attribute pid_attr = {
-	.attr = { .name = "pid", .mode = S_IRUGO},
-	.show = pid_show,
-};
+
+static DEVICE_ATTR_RO(pid);
 
 static int nbd_thread_recv(struct nbd_device *nbd, struct block_device *bdev)
 {
@@ -453,7 +451,7 @@ static int nbd_thread_recv(struct nbd_device *nbd, struct block_device *bdev)
 
 	sk_set_memalloc(nbd->sock->sk);
 
-	ret = device_create_file(disk_to_dev(nbd->disk), &pid_attr);
+	ret = device_create_file(disk_to_dev(nbd->disk), &dev_attr_pid);
 	if (ret) {
 		dev_err(disk_to_dev(nbd->disk), "device_create_file failed!\n");
 		return ret;
@@ -473,7 +471,7 @@ static int nbd_thread_recv(struct nbd_device *nbd, struct block_device *bdev)
 
 	nbd_size_clear(nbd, bdev);
 
-	device_remove_file(disk_to_dev(nbd->disk), &pid_attr);
+	device_remove_file(disk_to_dev(nbd->disk), &dev_attr_pid);
 	return ret;
 }
 
