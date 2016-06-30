@@ -127,7 +127,7 @@ static const char *nbdcmd_to_ascii(int cmd)
 
 static int nbd_size_clear(struct nbd_device *nbd, struct block_device *bdev)
 {
-	bdev->bd_inode->i_size = 0;
+	i_size_write(bdev->bd_inode, 0);
 	set_capacity(nbd->disk, 0);
 	kobject_uevent(&nbd_to_dev(nbd)->kobj, KOBJ_CHANGE);
 
@@ -139,7 +139,7 @@ static void nbd_size_update(struct nbd_device *nbd, struct block_device *bdev)
 	if (!nbd_is_connected(nbd))
 		return;
 
-	bdev->bd_inode->i_size = nbd->bytesize;
+	i_size_write(bdev->bd_inode, nbd->bytesize);
 	set_capacity(nbd->disk, nbd->bytesize >> 9);
 	kobject_uevent(&nbd_to_dev(nbd)->kobj, KOBJ_CHANGE);
 }
@@ -666,7 +666,7 @@ static void nbd_reset(struct nbd_device *nbd)
 static void nbd_bdev_reset(struct block_device *bdev)
 {
 	set_device_ro(bdev, false);
-	bdev->bd_inode->i_size = 0;
+	i_size_write(bdev->bd_inode, 0);
 	if (max_part > 0) {
 		blkdev_reread_part(bdev);
 		bdev->bd_invalidated = 1;
