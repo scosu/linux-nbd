@@ -639,17 +639,12 @@ static int nbd_set_socket(struct nbd_device *nbd, struct socket *sock)
 {
 	int ret = 0;
 
-	spin_lock_irq(&nbd->sock_lock);
-
-	if (nbd->sock) {
+	spin_lock(&nbd->sock_lock);
+	if (nbd->sock)
 		ret = -EBUSY;
-		goto out;
-	}
-
-	nbd->sock = sock;
-
-out:
-	spin_unlock_irq(&nbd->sock_lock);
+	else
+		nbd->sock = sock;
+	spin_unlock(&nbd->sock_lock);
 
 	return ret;
 }
