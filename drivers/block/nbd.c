@@ -39,6 +39,7 @@
 #include <asm/types.h>
 
 #include <linux/nbd.h>
+#include <linux/workqueue.h>
 
 struct nbd_device {
 	u32 flags;
@@ -69,6 +70,10 @@ struct nbd_device {
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 	struct dentry *dbg_dir;
 #endif
+	/*
+	 * This is specifically for calling sock_shutdown, for now.
+	 */
+	struct work_struct ws_shutdown;
 };
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
@@ -94,6 +99,8 @@ static int max_part;
  * Thanks go to Jens Axboe and Al Viro for their LKML emails explaining this!
  */
 static DEFINE_SPINLOCK(nbd_lock);
+
+static void nbd_ws_func_shutdown(struct work_struct *);
 
 static inline struct device *nbd_to_dev(struct nbd_device *nbd)
 {
@@ -172,39 +179,30 @@ static void nbd_end_request(struct nbd_device *nbd, struct request *req)
  */
 static void sock_shutdown(struct nbd_device *nbd)
 {
-	spin_lock_irq(&nbd->sock_lock);
+	struct socket *sock;
 
-	if (!nbd->sock) {
-		spin_unlock_irq(&nbd->sock_lock);
-		return;
-	}
-
-	dev_warn(disk_to_dev(nbd->disk), "shutting down socket\n");
-	kernel_sock_shutdown(nbd->sock, SHUT_RDWR);
-	sockfd_put(nbd->sock);
+	spin_lock(&nbd->sock_lock);
+	sock = nbd->sock;
 	nbd->sock = NULL;
-	spin_unlock_irq(&nbd->sock_lock);
+	spin_unlock(&nbd->sock_lock);
+
+	if (!sock)
+		return;
 
 	del_timer(&nbd->timeout_timer);
+	dev_warn(disk_to_dev(nbd->disk), "shutting down socket\n");
+	kernel_sock_shutdown(sock, SHUT_RDWR);
+	sockfd_put(sock);
 }
 
 static void nbd_xmit_timeout(unsigned long arg)
 {
 	struct nbd_device *nbd = (struct nbd_device *)arg;
-	unsigned long flags;
 
 	if (list_empty(&nbd->queue_head))
 		return;
-
-	spin_lock_irqsave(&nbd->sock_lock, flags);
-
 	nbd->timedout = true;
-
-	if (nbd->sock)
-		kernel_sock_shutdown(nbd->sock, SHUT_RDWR);
-
-	spin_unlock_irqrestore(&nbd->sock_lock, flags);
-
+	schedule_work(&nbd->ws_shutdown);
 	dev_err(nbd_to_dev(nbd), "Connection timed out, shutting down connection\n");
 }
 
@@ -659,6 +657,7 @@ static void nbd_reset(struct nbd_device *nbd)
 	set_capacity(nbd->disk, 0);
 	nbd->flags = 0;
 	nbd->xmit_timeout = 0;
+	INIT_WORK(&nbd->ws_shutdown, nbd_ws_func_shutdown);
 	queue_flag_clear_unlocked(QUEUE_FLAG_DISCARD, nbd->disk->queue);
 	del_timer_sync(&nbd->timeout_timer);
 }
@@ -794,10 +793,9 @@ static int __nbd_ioctl(struct block_device *bdev, struct nbd_device *nbd,
 		nbd_dev_dbg_close(nbd);
 		kthread_stop(thread);
 
+		sock_shutdown(nbd);
 		mutex_lock(&nbd->tx_lock);
 		nbd->task_recv = NULL;
-
-		sock_shutdown(nbd);
 		nbd_clear_que(nbd);
 		kill_bdev(bdev);
 		nbd_bdev_reset(bdev);
@@ -852,6 +850,17 @@ static const struct block_device_operations nbd_fops = {
 	.ioctl =	nbd_ioctl,
 	.compat_ioctl =	nbd_ioctl,
 };
+
+/*
+ * Shutdown function for nbd_dev work struct.
+ */
+static void nbd_ws_func_shutdown(struct work_struct *ws_nbd)
+{
+	struct nbd_device *nbd_dev = container_of(ws_nbd, struct nbd_device,
+						  ws_shutdown);
+
+	sock_shutdown(nbd_dev);
+}
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 
