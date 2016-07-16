@@ -74,6 +74,7 @@ struct nbd_device {
 	 * This is specifically for calling sock_shutdown, for now.
 	 */
 	struct work_struct ws_shutdown;
+	atomic_t users; /* Users that opened the block device */
 };
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
@@ -692,6 +693,11 @@ static void nbd_dev_dbg_close(struct nbd_device *nbd);
 static int __nbd_ioctl(struct block_device *bdev, struct nbd_device *nbd,
 		       unsigned int cmd, unsigned long arg)
 {
+	if (nbd->disconnect || nbd->timedout) {
+		dev_info(disk_to_dev(nbd->disk), "The blockdevice is still busy waiting for all clients to leave. Close all file handles so that the blockdevice can be reset.\n");
+		return -EBUSY;
+	}
+
 	switch (cmd) {
 	case NBD_DISCONNECT: {
 		struct request sreq;
@@ -721,7 +727,6 @@ static int __nbd_ioctl(struct block_device *bdev, struct nbd_device *nbd,
 		nbd_clear_que(nbd);
 		BUG_ON(!list_empty(&nbd->queue_head));
 		BUG_ON(!list_empty(&nbd->waiting_queue));
-		kill_bdev(bdev);
 		return 0;
 
 	case NBD_SET_SOCK: {
@@ -797,15 +802,11 @@ static int __nbd_ioctl(struct block_device *bdev, struct nbd_device *nbd,
 		mutex_lock(&nbd->tx_lock);
 		nbd->task_recv = NULL;
 		nbd_clear_que(nbd);
-		kill_bdev(bdev);
-		nbd_bdev_reset(bdev);
 
 		if (nbd->disconnect) /* user requested, ignore socket errors */
 			error = 0;
 		if (nbd->timedout)
 			error = -ETIMEDOUT;
-
-		nbd_reset(nbd);
 
 		return error;
 	}
@@ -845,10 +846,38 @@ static int nbd_ioctl(struct block_device *bdev, fmode_t mode,
 	return error;
 }
 
+static int nbd_open(struct block_device *bdev, fmode_t mode)
+{
+	struct nbd_device *nbd = bdev->bd_disk->private_data;
+
+	atomic_inc(&nbd->users);
+
+	return 0;
+}
+
+static void nbd_release(struct gendisk *disk, fmode_t mode)
+{
+	struct nbd_device *nbd = disk->private_data;
+
+	if (atomic_dec_and_test(&nbd->users)) {
+		struct block_device *bdev = bdget(part_devt(dev_to_part(
+						nbd_to_dev(nbd))));
+		WARN_ON(!bdev);
+		if (bdev) {
+			nbd_bdev_reset(bdev);
+			kill_bdev(bdev);
+			bdput(bdev);
+		}
+		nbd_reset(nbd);
+	}
+}
+
 static const struct block_device_operations nbd_fops = {
 	.owner =	THIS_MODULE,
 	.ioctl =	nbd_ioctl,
 	.compat_ioctl =	nbd_ioctl,
+	.open =         nbd_open,
+	.release =      nbd_release,
 };
 
 /*
